@@ -1,0 +1,138 @@
+name: RE4 Pak Auto Extractor ubuntu
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  extract-unpack-decompile:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Wine, Toolchains, and System Dependencies
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        # প্রয়োজনীয় টুলস এবং Ghidra-এর জন্য Java (openjdk-17) ইনস্টল করা হচ্ছে
+        sudo apt-get install -y wine wine32 wine64 unrar p7zip-full zip binutils llvm clang openjdk-17-jdk wget
+
+    - name: Install IPSW Mach-O Analyzer Engine
+      run: |
+        echo "Installing blacktop/ipsw toolchain for native structural extraction..."
+        curl -sS https://webi.sh/ipsw | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Download IPA file
+      run: |
+        curl -L -o app.ipa "https://github.com/Doann7457/tai-ipa/releases/download/jp.co.capcom.RE4US-6462360082-863325402/jp.co.capcom.RE4US-1.0.2-6462360082-863325402.ipa"
+
+    - name: Extract IPA
+      run: |
+        mkdir -p extracted_ipa
+        unzip app.ipa -d extracted_ipa/
+
+    - name: Download and Extract FluffyQuack REtool
+      run: |
+        echo "Downloading compiled REtool..."
+        curl -L -o REtool.rar "http://www.fluffyquack.com/tools/REtool.rar"
+        
+        echo "Extracting RAR package..."
+        mkdir -p Utils
+        mkdir -p temp_extracted
+        unrar x -o+ REtool.rar temp_extracted/
+        
+        FOUND_RETOOL=$(find temp_extracted/ -iname "retool.exe" -print -quit)
+        if [ -n "$FOUND_RETOOL" ]; then
+            mv "$FOUND_RETOOL" Utils/retool.exe
+            echo "Success: retool.exe sits ready in Utils/."
+            rm -rf temp_extracted
+        else
+            echo "Failed to locate retool.exe inside the archive."
+            exit 1
+        fi
+
+    - name: Full Extraction of Mach-O Binary Structure
+      run: |
+        echo "Locating target executable engine..."
+        BINARY_PATH=$(find extracted_ipa/ -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
+        
+        if [ -n "$BINARY_PATH" ]; then
+            echo "Found target binary at: $BINARY_PATH"
+            mkdir -p Full_Binary_Extraction
+            
+            echo "1. Extracting full structural overview and segment allocations..."
+            ipsw macho info "$BINARY_PATH" > Full_Binary_Extraction/macho_segments_layout.txt || true
+            
+            echo "2. De-compiling class templates, methods, protocols, and interfaces..."
+            ipsw macho class-dump "$BINARY_PATH" > Full_Binary_Extraction/reconstructed_classes.h || true
+            
+            echo "3. Disassembling raw execution instructions from the text segment..."
+            llvm-objdump -d --macho --demangle "$BINARY_PATH" > Full_Binary_Extraction/disassembled_machine_code.asm || true
+            
+            echo "4. Checking code signing certificates and system entitlements..."
+            ipsw macho ent "$BINARY_PATH" > Full_Binary_Extraction/entitlements.json || true
+            
+            # পরবর্তী ডিকম্পাইল স্টেপের সুবিধার জন্য বাইনারি পাথ সেভ করে রাখছি
+            echo "BINARY_PATH=$BINARY_PATH" >> $GITHUB_ENV
+        else
+            echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be find!"
+            exit 1
+        fi
+
+    - name: Execute REtool to Auto-Extract PAK / Chunk Files
+      run: |
+        echo "Searching for RE4 Game Assets (.pak or .re_chunk files)..."
+        mkdir -p Extracted_Game_Assets
+        
+        # IPA-এর ভেতর যেখানে মেইন গেম ডাটা বা .pak ফাইল থাকে তা খুঁজে বের করা
+        # REtool সাধারণত .pak বা .re_chunk ফাইল আনপ্যাক করতে wine দিয়ে চালানো হয়
+        find extracted_ipa/ -type f \( -name "*.pak" -o -name "*.re_chunk*" \) | while read -r pak_file; do
+            echo "Extracting asset file: $pak_file"
+            wine Utils/retool.exe "$pak_file" Extracted_Game_Assets/ || true
+        done
+        
+        # যদি কোনো এসেট এক্সট্র্যাক্ট হয়ে থাকে তবে জিপ করা হবে
+        if [ -d "Extracted_Game_Assets" ]; then
+            zip -r re4_extracted_assets.zip Extracted_Game_Assets/ || true
+        fi
+
+    - name: Decompile Machine Code to High-Level C Code (Open Source Attempt)
+      run: |
+        echo "Downloading Ghidra Decompiler Engine..."
+        wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.0.1_build/ghidra_11.0.1_PUBLIC_20240119.zip
+        unzip ghidra_11.0.1_PUBLIC_20240119.zip -d ghidra_tool
+        GHIDRA_HEADLESS=$(find ghidra_tool/ -name "analyzeHeadless" -print -quit)
+        
+        mkdir -p Decompiled_Source_Code
+        mkdir -p ghidra_project
+        
+        if [ -n "$GHIDRA_HEADLESS" ] && [ -n "${{ env.BINARY_PATH }}" ]; then
+            echo "Running Ghidra Headless Analyzer to reverse machine code back to high-level C/C++ structured definitions..."
+            
+            # Ghidra headless মোডে রান করে বাইনারি এনালাইসিস করে সোর্স কোড জেনারেট করার চেষ্টা করবে
+            # এটি ইন্টারনাল ফাংশনগুলোকে C-লাইক স্ট্রাকচারে কনভার্ট করবে
+            $GHIDRA_HEADLESS ghidra_project RE4_Decompile_Proj -import "${{ env.BINARY_PATH }}" -postScript Decompile.java Decompiled_Source_Code/high_level_source.c || true
+            
+            # ব্যাকআপ হিসেবে আপনার জেনারেট করা .asm এবং হেডার ফাইলগুলোকে একসাথে রাখা হচ্ছে
+            cp Full_Binary_Extraction/reconstructed_classes.h Decompiled_Source_Code/
+            cp Full_Binary_Extraction/disassembled_machine_code.asm Decompiled_Source_Code/
+            
+            zip -r re4_open_source_code.zip Decompiled_Source_Code/
+        else
+            echo "Skipping advanced decompilation due to missing path parameters."
+        fi
+
+    - name: Save All Extracted Outputs & Open-Source Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: RE4-Fully-Extracted-and-Decompiled-Package
+        path: |
+          re4_fully_extracted_macho.zip
+          re4_extracted_assets.zip
+          re4_open_source_code.zip
+        retention-days: 7
