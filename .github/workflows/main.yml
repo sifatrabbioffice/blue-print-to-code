@@ -1,4 +1,4 @@
-name: RE4 Pak Auto Extractor macos
+name: RE4 Pak Auto Extractor macos Ultimate Fix
 
 on:
   push:
@@ -14,23 +14,24 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install IPSW Toolchain (macOS Native)
+    - name: Install IPSW via Homebrew (The Safest Way for macOS)
       run: |
-        echo "Installing blacktop/ipsw via curl..."
-        curl -sS https://webi.sh/ipsw | sh
-        # macOS রানারের গ্লোবাল এনভায়রনমেন্ট পাথে যুক্ত করা
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        echo "Installing ipsw using native macOS Homebrew..."
+        # blacktop-এর অফিসিয়াল ট্যাপ অ্যাড করে ipsw ইনস্টল করা
+        brew tap blacktop/tap
+        brew install ipsw
 
     - name: Download and Extract IPA
       run: |
         curl -L -o app.ipa "https://github.com/Doann7457/tai-ipa/releases/download/jp.co.capcom.RE4US-6462360082-863325402/jp.co.capcom.RE4US-1.0.2-6462360082-863325402.ipa"
         mkdir -p extracted_ipa
-        unzip app.ipa -d extracted_ipa/
+        # ম্যাকের নেটিভ 7z দিয়ে সেফলি আনজিপ করা
+        7z x app.ipa -oextracted_ipa/ -y
 
     - name: Full Extraction of Mach-O Binary Structure
       run: |
-        # কমান্ড নট ফাউন্ড এরর এড়াতে কারেন্ট সেশনে পাথ ফোর্স করা হলো
-        export PATH="$HOME/.local/bin:$PATH"
+        # হোমব্রু এর ডিফল্ট গ্লোবাল পাথ এনভায়রনমেন্ট সেট করা (Apple Silicon/Intel দুটোর জন্যই সেফ)
+        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
         
         BINARY_PATH=$(find extracted_ipa/ -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
         
@@ -45,7 +46,6 @@ jobs:
             ipsw macho class-dump "$BINARY_PATH" > Full_Binary_Extraction/reconstructed_classes.h || true
             
             echo "3. Disassembling execution instructions via Native macOS Toolchain..."
-            # macOS এর নিজস্ব নেটিভ otool ব্যবহার করা হয়েছে যা ইনস্ট্রাকশন সেট এরর দেবে না
             otool -tV "$BINARY_PATH" > Full_Binary_Extraction/disassembled_machine_code.asm || true
             
             echo "4. Checking entitlements and code signing..."
