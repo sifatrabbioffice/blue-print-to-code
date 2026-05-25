@@ -14,11 +14,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install System Dependencies and Toolchains
+    - name: Install Toolchains and System Dependencies
       run: |
         sudo apt-get update
         # Installs essential toolchains for handling Apple structural binary decoding
-        sudo apt-get install -y p7zip-full zip binutils llvm clang
+        sudo apt-get install -y unrar p7zip-full zip binutils llvm clang
 
     - name: Install IPSW Mach-O Analyzer Engine
       run: |
