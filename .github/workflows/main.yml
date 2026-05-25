@@ -25,7 +25,7 @@ jobs:
       run: |
         curl -L -o app.ipa "https://github.com/Doann7457/tai-ipa/releases/download/jp.co.capcom.RE4US-6462360082-863325402/jp.co.capcom.RE4US-1.0.2-6462360082-863325402.ipa"
         mkdir -p extracted_ipa
-        # ম্যাকের নেটিভ 7z দিয়ে সেফলি আনজিপ করা
+        # ম্যাকের নেтивного শক্তিশালী 7z দিয়ে ফাইল এক্সট্রাক্ট করা
         7z x app.ipa -oextracted_ipa/ -y
 
     - name: Full Extraction of Mach-O Binary Structure
