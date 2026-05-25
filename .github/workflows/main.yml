@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
 
 jobs:
+  # জব ১: আপনার আগের উবুন্টু জব (অ্যাসেম্বলি ও ক্লাস ডাম্পের জন্য)
   extract-and-unpack:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -17,58 +17,89 @@ jobs:
     - name: Install Toolchains and System Dependencies
       run: |
         sudo apt-get update
-        # Installs essential toolchains for handling Apple structural binary decoding
         sudo apt-get install -y unrar p7zip-full zip binutils llvm clang
 
     - name: Install IPSW Mach-O Analyzer Engine
       run: |
-        echo "Installing blacktop/ipsw toolchain for native structural extraction..."
         curl -sS https://webi.sh/ipsw | sh
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-    - name: Download IPA file
+    - name: Download and Extract IPA
       run: |
         curl -L -o app.ipa "https://github.com/Doann7457/tai-ipa/releases/download/jp.co.capcom.RE4US-6462360082-863325402/jp.co.capcom.RE4US-1.0.2-6462360082-863325402.ipa"
-
-    - name: Extract IPA
-      run: |
         mkdir -p extracted_ipa
         unzip app.ipa -d extracted_ipa/
 
     - name: Full Extraction of Mach-O Binary Structure
       run: |
-        echo "Locating target executable engine..."
         BINARY_PATH=$(find extracted_ipa/ -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
-        
         if [ -n "$BINARY_PATH" ]; then
-            echo "Found target binary at: $BINARY_PATH"
             mkdir -p Full_Binary_Extraction
-            
-            echo "1. Extracting full structural overview and segment allocations..."
             ipsw macho info "$BINARY_PATH" > Full_Binary_Extraction/macho_segments_layout.txt || true
-            
-            echo "2. De-compiling class templates, methods, protocols, and interfaces..."
-            # Reconstructs Objective-C headers and execution patterns
             ipsw macho class-dump "$BINARY_PATH" > Full_Binary_Extraction/reconstructed_classes.h || true
-            
-            echo "3. Disassembling raw execution instructions from the text segment..."
-            # Breaks machine code down to structured assembly segments
             llvm-objdump -d --macho --demangle "$BINARY_PATH" > Full_Binary_Extraction/disassembled_machine_code.asm || true
-            
-            echo "4. Checking code signing certificates and system entitlements..."
             ipsw macho ent "$BINARY_PATH" > Full_Binary_Extraction/entitlements.json || true
-            
-            # Package the entire extracted code directory layout
             zip -r re4_fully_extracted_macho.zip Full_Binary_Extraction/
-            echo "Success: Compiled data fully extracted into re4_fully_extracted_macho.zip"
         else
             echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be found!"
             exit 1
         fi
 
-    - name: Save Fully Extracted Mach-O Artifact
+    # পরবর্তী জবে ফাইলটি পাঠানোর জন্য সাময়িকভাবে র-বাইনারিটি আপলোড করা
+    - name: Share Binary for macOS Job
       uses: actions/upload-artifact@v4
       with:
-        name: Resident-Evil-4-Fully-Extracted-Binary
-        path: re4_fully_extracted_macho.zip
+        name: raw-re4-binary
+        path: extracted_ipa/Payload/Resident Evil 4.app/Resident Evil 4
+        retention-days: 1
+
+  # জব ২: নতুন macOS জব যা Ghidra দিয়ে C-কোড ডিকম্পাইল করবে
+  ghidra-decompile:
+    needs: extract-and-unpack
+    runs-on: macos-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Java (Required for Ghidra)
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Download and Install Ghidra
+      run: |
+        echo "Downloading Ghidra..."
+        curl -L -o ghidra.zip "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.2_build/ghidra_11.1.2_PUBLIC_20240709.zip"
+        unzip ghidra.zip
+        mv ghidra_11.1.2_PUBLIC Ghidra
+        echo "$(pwd)/Ghidra/support" >> $GITHUB_PATH
+
+    - name: Download Raw Binary from previous job
+      uses: actions/download-artifact@v4
+      with:
+        name: raw-re4-binary
+        path: ./target_binary
+
+    - name: Run Ghidra Headless Decompiler
+      run: |
+        mkdir -p Ghidra_Project
+        mkdir -p Decompiled_Output
+        
+        # Ghidra Headless কমান্ড রান করা
+        # এটি প্রজেক্ট তৈরি করবে, ARM64 Mach-O ফাইল ইমপোর্ট করবে এবং ডি-কম্পাইল স্ক্রিপ্ট চালাবে
+        ./Ghidra/support/analyzeHeadless Ghidra_Project RE4_Analysis \
+          -import ./target_binary/Resident\ Evil\ 4 \
+          -postScript Decompile.java ./Decompiled_Output/pseudo_code.c \
+          -deleteProject || true
+
+    - name: Zip Decompiled C Code
+      run: |
+        zip -r re4_ghidra_decompiled_c.zip Decompiled_Output/
+
+    - name: Save Ghidra Decompiled Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Resident-Evil-4-Ghidra-C-Code
+        path: re4_ghidra_decompiled_c.zip
         retention-days: 3
